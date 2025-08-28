@@ -5,6 +5,7 @@ import os
 import getpass
 import uuid
 import sys
+from urllib.parse import urlparse
 
 from rich.console import Console
 from rich.prompt import Prompt
@@ -47,6 +48,18 @@ class XUIAPI:
         self.username = username
         self.password = password
         self.session = requests.Session()
+        
+        # Parse the hostname and port from the base_url to use for the Host header
+        parsed_url = urlparse(self.base_url)
+        # Use netloc if it contains host:port, otherwise just host
+        host_header = parsed_url.netloc if ':' in parsed_url.netloc else parsed_url.hostname
+        
+        # Set default headers for the session
+        self.session.headers.update({
+            'Accept': 'application/json',
+            'Content-Type': 'application/x-www-form-urlencoded', # Login often uses this
+            'Host': host_header # Explicitly set the Host header
+        })
         self.login_status = False
 
     def _request(self, method, endpoint, json_data=None, data=None):
@@ -54,7 +67,11 @@ class XUIAPI:
         url = f"{self.base_url}{endpoint}"
         try:
             if method == "POST":
-                response = self.session.post(url, json=json_data, data=data, timeout=10)
+                # For login, data is passed as form-urlencoded
+                if endpoint == "/login":
+                    response = self.session.post(url, data=data, timeout=10)
+                else: # For other POST requests, use json_data
+                    response = self.session.post(url, json=json_data, timeout=10)
             elif method == "GET":
                 response = self.session.get(url, timeout=10)
             else:
@@ -80,9 +97,9 @@ class XUIAPI:
         except requests.exceptions.RequestException as e:
             console.print(f"[bold red]Request Error for {url}: {e}[/bold red]")
             return None
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
             # If the response text is empty or not JSON, print it for debugging
-            console.print(f"[bold red]Error: Received non-JSON response from {url}. Response Status: {response.status_code}. Response Content: '{response.text}'[/bold red]")
+            console.print(f"[bold red]Error: JSON parsing failed from {url}. Status: {response.status_code}. Content: '{response.text}'. Error: {e}[/bold red]")
             return None
         except Exception as e:
             console.print(f"[bold red]An unexpected error occurred for {url}: {e}[/bold red]")
@@ -95,9 +112,13 @@ class XUIAPI:
         data = {"username": self.username, "password": self.password}
         
         try:
-            # Login usually requires sending form data, not JSON
             response = self.session.post(f"{self.base_url}{endpoint}", data=data, timeout=10)
             response.raise_for_status()
+
+            # --- DEBUGGING LINE ADDED HERE ---
+            console.print(f"[bold yellow]DEBUG: Login Response Status: {response.status_code}[/bold yellow]")
+            console.print(f"[bold yellow]DEBUG: Raw Login Response Text: '{response.text}'[/bold yellow]")
+            # --- END DEBUGGING LINE ---
 
             res_json = response.json()
             if res_json.get('success'):
@@ -127,11 +148,6 @@ class XUIAPI:
             console.print("[bold red]Not logged in. Please log in first.[/bold red]")
             return None
         
-        # X-UI API for single inbound details often uses /panel/api/inbounds/get/<id>
-        # However, it might also be that list provides enough, or update needs full object.
-        # Assuming list is sufficient, let's filter it. If update needs *more* details,
-        # a dedicated get endpoint would be needed. For now, we'll get from the list first.
-        
         inbounds_list_res = self.get_inbounds()
         if inbounds_list_res and inbounds_list_res.get('obj'):
             for inbound in inbounds_list_res['obj']:
@@ -145,10 +161,20 @@ class XUIAPI:
             console.print("[bold red]Not logged in. Please log in first.[/bold red]")
             return None
         
-        # The X-UI API's update endpoint typically expects the entire inbound object
-        # The endpoint is usually /panel/api/inbounds/update
         endpoint = "/panel/api/inbounds/update"
-        return self._request("POST", endpoint, json_data=inbound_config)
+        
+        # Temporarily override Content-Type for JSON data if needed
+        original_content_type = self.session.headers.get('Content-Type')
+        self.session.headers.update({'Content-Type': 'application/json'})
+        response = self._request("POST", endpoint, json_data=inbound_config)
+        
+        # Restore original Content-Type
+        if original_content_type:
+            self.session.headers.update({'Content-Type': original_content_type})
+        else:
+            if 'Content-Type' in self.session.headers:
+                del self.session.headers['Content-Type']
+        return response
 
 # --- TUI Application Logic ---
 def main():
@@ -177,10 +203,9 @@ def main():
 
     # 2. Login
     with console.status("[bold blue]Attempting to log in to X-UI panel...[/bold blue]", spinner="dots"):
-        if not xui_api.login_status: # Check if we're already logged in from previous session attempt
-            if not xui_api.login():
-                console.print("[bold red]Login failed. Please check credentials and URL.[/bold red]")
-                sys.exit(1) # Exit if login fails
+        if not xui_api.login():
+            console.print("[bold red]Login failed. Please check credentials and URL.[/bold red]")
+            sys.exit(1) # Exit if login fails
 
     # 3. Fetch Inbounds
     console.print("\n[bold blue]Fetching inbounds...[/bold blue]")
@@ -233,7 +258,7 @@ def main():
             sys.exit(1)
 
     if not selected_inbound_ids:
-        console.print("[bold yellow]No inbounds selected. Exiting.[/bold red]")
+        console.print("[bold yellow]No inbounds selected. Exiting.[/bold yellow]")
         sys.exit(0)
 
     # 4. Get Client Details
