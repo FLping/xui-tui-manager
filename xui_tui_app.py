@@ -5,7 +5,7 @@ import os
 import getpass
 import uuid
 import sys
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 
 from rich.console import Console
 from rich.prompt import Prompt
@@ -43,38 +43,53 @@ def save_config(config):
 class XUIAPI:
     """A client for interacting with the X-UI panel API."""
     def __init__(self, base_url, username, password, verify_ssl=True):
-        self.base_url = base_url.rstrip('/')
+        # The base_url is the user-provided URL, e.g., https://domain:port/jende/
+        # Ensure it always has a trailing slash for urljoin to work predictably with relative paths
+        self.base_url = base_url.rstrip('/') + '/' 
         self.username = username
         self.password = password
         self.session = requests.Session()
         self.verify_ssl = verify_ssl # Store SSL verification setting
         
-        # Parse the hostname from the base_url for the Host header
+        # Parse the hostname and port from the base_url for the Host header
         parsed_url = urlparse(self.base_url)
-        host_header = parsed_url.netloc
-
+        # netloc contains host:port if port is specified, otherwise just host
+        host_header = parsed_url.netloc 
+        
         self.session.headers.update({
             'Accept': 'application/json',
-            'Content-Type': 'application/x-www-form-urlencoded',
+            'Content-Type': 'application/x-www-form-urlencoded', # Default for login and form-data POSTs
             'Host': host_header 
         })
         self.login_status = False
 
     def _request(self, method, endpoint, json_data=None, data=None):
         """Helper method to make API requests and handle common errors."""
-        url = f"{self.base_url}{endpoint}"
+        # Use urljoin to correctly concatenate base_url and endpoint, handling slashes
+        url = urljoin(self.base_url, endpoint)
+        console.print(f"[bold blue]DEBUG: Requesting URL: {url}[/bold blue]") 
         try:
             if method == "POST":
-                if endpoint == "/login":
+                # For endpoints like "login" that use form-urlencoded data
+                if endpoint == "login":
                     response = self.session.post(url, data=data, timeout=10, verify=self.verify_ssl)
-                else: 
+                else: # For other POST requests (e.g., update_inbound) that use JSON data
+                    # Temporarily override Content-Type for JSON payloads for this request
+                    original_content_type = self.session.headers.get('Content-Type')
+                    self.session.headers.update({'Content-Type': 'application/json'})
                     response = self.session.post(url, json=json_data, timeout=10, verify=self.verify_ssl)
+                    # Restore original Content-Type after the request
+                    if original_content_type:
+                        self.session.headers.update({'Content-Type': original_content_type})
+                    else:
+                        if 'Content-Type' in self.session.headers:
+                            del self.session.headers['Content-Type']
             elif method == "GET":
                 response = self.session.get(url, timeout=10, verify=self.verify_ssl)
             else:
                 raise ValueError(f"Unsupported HTTP method: {method}")
 
-            response.raise_for_status() 
+            response.raise_for_status() # Raise an exception for HTTP errors (4xx or 5xx)
             
             res_json = response.json()
             if not res_json.get('success', False):
@@ -91,7 +106,6 @@ class XUIAPI:
             console.print(f"[bold red]Request timed out for {url}.[/bold red]")
             return None
         except requests.exceptions.RequestException as e:
-            # Special handling for SSL/TLS errors
             if "SSL" in str(e) or "certificate" in str(e):
                 console.print(f"[bold red]SSL/TLS Error for {url}: {e}. Try disabling SSL verification if you are using a self-signed certificate or custom HTTPS setup.[/bold red]")
             else:
@@ -107,32 +121,26 @@ class XUIAPI:
     def login(self):
         """Authenticates with the X-UI panel."""
         console.print("[bold blue]Logging in to X-UI...[/bold blue]")
-        endpoint = "/login"
+        endpoint = "login" # Endpoint relative to base_url
         data = {"username": self.username, "password": self.password}
         
         try:
-            response = self.session.post(f"{self.base_url}{endpoint}", data=data, timeout=10, verify=self.verify_ssl)
-            response.raise_for_status()
-
-            console.print(f"[bold yellow]DEBUG: Login Response Status: {response.status_code}[/bold yellow]")
-            console.print(f"[bold yellow]DEBUG: Raw Login Response Text: '{response.text}'[/bold yellow]")
-
-            res_json = response.json()
-            if res_json.get('success'):
+            # Call _request with the endpoint and data
+            response = self._request("POST", endpoint, data=data) 
+            
+            # The DEBUG lines are now handled inside _request. Here we just check the response.
+            if response and response.get('success'):
                 self.login_status = True
                 console.print("[bold green]Login successful![/bold green]")
                 return True
             else:
-                msg = res_json.get('msg', 'Authentication failed.')
+                msg = response.get('msg', 'Authentication failed.') if response else 'No response or unsuccessful login from server.'
                 console.print(f"[bold red]Login failed: {msg}[/bold red]")
                 self.login_status = False
                 return False
         except requests.exceptions.RequestException as e:
-            # Re-raise with specific SSL message if applicable
-            if "SSL" in str(e) or "certificate" in str(e):
-                 console.print(f"[bold red]SSL/TLS Error during login for {self.base_url}{endpoint}: {e}. Ensure your X-UI panel's HTTPS certificate is valid or try disabling SSL verification if using a self-signed certificate (for testing).[/bold red]")
-            else:
-                console.print(f"[bold red]Login request failed: {e}[/bold red]")
+            # Error messages are now more descriptive from _request or here.
+            console.print(f"[bold red]Login request failed due to an exception: {e}[/bold red]")
             self.login_status = False
             return False
 
@@ -141,7 +149,9 @@ class XUIAPI:
         if not self.login_status:
             console.print("[bold red]Not logged in. Please log in first.[/bold red]")
             return None
-        return self._request("GET", "/panel/api/inbounds/list")
+        # Endpoint relative to base_url (which is .../jende/).
+        # urljoin will correctly make it .../jende/panel/api/inbounds/list
+        return self._request("GET", "panel/api/inbounds/list") 
 
     def get_inbound_details(self, inbound_id):
         """Fetches the detailed configuration for a specific inbound."""
@@ -149,6 +159,7 @@ class XUIAPI:
             console.print("[bold red]Not logged in. Please log in first.[/bold red]")
             return None
         
+        # This will internally call get_inbounds with the correct endpoint
         inbounds_list_res = self.get_inbounds()
         if inbounds_list_res and inbounds_list_res.get('obj'):
             for inbound in inbounds_list_res['obj']:
@@ -162,18 +173,11 @@ class XUIAPI:
             console.print("[bold red]Not logged in. Please log in first.[/bold red]")
             return None
         
-        endpoint = "/panel/api/inbounds/update"
-        
-        original_content_type = self.session.headers.get('Content-Type')
-        self.session.headers.update({'Content-Type': 'application/json'})
-        response = self._request("POST", endpoint, json_data=inbound_config)
-        
-        if original_content_type:
-            self.session.headers.update({'Content-Type': original_content_type})
-        else:
-            if 'Content-Type' in self.session.headers:
-                del self.session.headers['Content-Type']
-        return response
+        # Endpoint relative to base_url (which is .../jende/).
+        # urljoin will correctly make it .../jende/panel/api/inbounds/update
+        endpoint = "panel/api/inbounds/update" 
+        return self._request("POST", endpoint, json_data=inbound_config)
+
 
 # --- TUI Application Logic ---
 def main():
@@ -190,7 +194,7 @@ def main():
         console.print("[bold yellow]No configuration found or it's invalid. Please enter X-UI details:[/bold yellow]")
         config = {}
         config['url'] = Prompt.ask(
-            "Enter X-UI Panel URL (e.g., [green]https://your-domain.com:port/your_webpath[/green])",
+            "Enter X-UI Panel URL (e.g., [green]https://your-domain.com:port/jende/[/green] - **must** end with a slash)", # Clarified prompt
             default=os.getenv("XUI_URL", "")
         )
         config['username'] = Prompt.ask("Enter X-UI Username", default=os.getenv("XUI_USERNAME", ""))
@@ -229,11 +233,11 @@ def main():
     console.print("\n[bold blue]Fetching inbounds...[/bold blue]")
     inbounds_res = xui_api.get_inbounds()
     
-    if not inbounds_res or not inbounds_res.get('obj'):
-        console.print("[bold yellow]No inbounds found or error fetching inbounds.[/bold yellow]")
+    if not inbounds_res or not isinstance(inbounds_res, dict) or not inbounds_res.get('obj'):
+        console.print("[bold yellow]No inbounds found or error fetching inbounds, or invalid response format.[/bold yellow]")
         sys.exit(0)
     
-    inbounds = inbounds_res['obj']
+    inbounds = inbounds_res['obj'] 
 
     # Display inbounds and allow selection
     inbound_table = Table(title="Available Inbounds", show_lines=True)
