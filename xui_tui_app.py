@@ -42,6 +42,7 @@ def save_config(config):
 class XUIAPI:
     """A client for interacting with the X-UI panel API."""
     def __init__(self, base_url, username, password):
+        # Ensure base_url is just the protocol://host:port part
         self.base_url = base_url.rstrip('/')
         self.username = username
         self.password = password
@@ -80,7 +81,8 @@ class XUIAPI:
             console.print(f"[bold red]Request Error for {url}: {e}[/bold red]")
             return None
         except json.JSONDecodeError:
-            console.print(f"[bold red]Error: Received non-JSON response from {url}. Response: {response.text[:200]}...[/bold red]")
+            # If the response text is empty or not JSON, print it for debugging
+            console.print(f"[bold red]Error: Received non-JSON response from {url}. Response Status: {response.status_code}. Response Content: '{response.text}'[/bold red]")
             return None
         except Exception as e:
             console.print(f"[bold red]An unexpected error occurred for {url}: {e}[/bold red]")
@@ -161,7 +163,10 @@ def main():
         # Prompt for details if no config or corrupted config
         console.print("[bold yellow]No configuration found or it's invalid. Please enter X-UI details:[/bold yellow]")
         config = {}
-        config['url'] = Prompt.ask("Enter X-UI Panel URL", default=os.getenv("XUI_URL", ""))
+        config['url'] = Prompt.ask(
+            "Enter X-UI Panel URL (e.g., [green]https://your-domain.com:port[/green] or [green]http://your-ip:port[/green])",
+            default=os.getenv("XUI_URL", "")
+        )
         config['username'] = Prompt.ask("Enter X-UI Username", default=os.getenv("XUI_USERNAME", ""))
         config['password'] = getpass.getpass("Enter X-UI Password (will not be displayed): ")
         save_config(config)
