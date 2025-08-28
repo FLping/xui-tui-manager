@@ -42,26 +42,21 @@ def save_config(config):
 # --- X-UI API Client ---
 class XUIAPI:
     """A client for interacting with the X-UI panel API."""
-    def __init__(self, base_url, username, password):
-        # The base_url should now include the full path, e.g., https://domain:port/webpath
+    def __init__(self, base_url, username, password, verify_ssl=True):
         self.base_url = base_url.rstrip('/')
         self.username = username
         self.password = password
         self.session = requests.Session()
+        self.verify_ssl = verify_ssl # Store SSL verification setting
         
         # Parse the hostname from the base_url for the Host header
-        # The Host header should NOT include the path.
         parsed_url = urlparse(self.base_url)
-        
-        # Construct the Host header as domain[:port]
-        # netloc already contains host:port if port is specified, otherwise just host
         host_header = parsed_url.netloc
-        
-        # Set default headers for the session
+
         self.session.headers.update({
             'Accept': 'application/json',
-            'Content-Type': 'application/x-www-form-urlencoded', # Login often uses this
-            'Host': host_header # Explicitly set the Host header based on the URL's domain/IP:port
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Host': host_header 
         })
         self.login_status = False
 
@@ -70,19 +65,17 @@ class XUIAPI:
         url = f"{self.base_url}{endpoint}"
         try:
             if method == "POST":
-                # For login, data is passed as form-urlencoded
                 if endpoint == "/login":
-                    response = self.session.post(url, data=data, timeout=10)
-                else: # For other POST requests, use json_data
-                    response = self.session.post(url, json=json_data, timeout=10)
+                    response = self.session.post(url, data=data, timeout=10, verify=self.verify_ssl)
+                else: 
+                    response = self.session.post(url, json=json_data, timeout=10, verify=self.verify_ssl)
             elif method == "GET":
-                response = self.session.get(url, timeout=10)
+                response = self.session.get(url, timeout=10, verify=self.verify_ssl)
             else:
                 raise ValueError(f"Unsupported HTTP method: {method}")
 
-            response.raise_for_status() # Raise an exception for HTTP errors (4xx or 5xx)
+            response.raise_for_status() 
             
-            # X-UI API typically returns JSON with a 'success' field
             res_json = response.json()
             if not res_json.get('success', False):
                 msg = res_json.get('msg', 'Unknown X-UI API error.')
@@ -92,16 +85,19 @@ class XUIAPI:
             console.print(f"[bold red]HTTP Error for {url}: {e.response.status_code} - {e.response.text}[/bold red]")
             return None
         except requests.exceptions.ConnectionError as e:
-            console.print(f"[bold red]Connection Error for {url}: {e}. Check URL and network connection.[/bold red]")
+            console.print(f"[bold red]Connection Error for {url}: {e}. Check URL, network connection, and SSL certificate.[/bold red]")
             return None
         except requests.exceptions.Timeout:
             console.print(f"[bold red]Request timed out for {url}.[/bold red]")
             return None
         except requests.exceptions.RequestException as e:
-            console.print(f"[bold red]Request Error for {url}: {e}[/bold red]")
+            # Special handling for SSL/TLS errors
+            if "SSL" in str(e) or "certificate" in str(e):
+                console.print(f"[bold red]SSL/TLS Error for {url}: {e}. Try disabling SSL verification if you are using a self-signed certificate or custom HTTPS setup.[/bold red]")
+            else:
+                console.print(f"[bold red]Request Error for {url}: {e}[/bold red]")
             return None
         except json.JSONDecodeError as e:
-            # If the response text is empty or not JSON, print it for debugging
             console.print(f"[bold red]Error: JSON parsing failed from {url}. Status: {response.status_code}. Content: '{response.text}'. Error: {e}[/bold red]")
             return None
         except Exception as e:
@@ -115,13 +111,11 @@ class XUIAPI:
         data = {"username": self.username, "password": self.password}
         
         try:
-            response = self.session.post(f"{self.base_url}{endpoint}", data=data, timeout=10)
+            response = self.session.post(f"{self.base_url}{endpoint}", data=data, timeout=10, verify=self.verify_ssl)
             response.raise_for_status()
 
-            # --- DEBUGGING LINE ADDED HERE ---
             console.print(f"[bold yellow]DEBUG: Login Response Status: {response.status_code}[/bold yellow]")
             console.print(f"[bold yellow]DEBUG: Raw Login Response Text: '{response.text}'[/bold yellow]")
-            # --- END DEBUGGING LINE ---
 
             res_json = response.json()
             if res_json.get('success'):
@@ -134,7 +128,11 @@ class XUIAPI:
                 self.login_status = False
                 return False
         except requests.exceptions.RequestException as e:
-            console.print(f"[bold red]Login request failed: {e}[/bold red]")
+            # Re-raise with specific SSL message if applicable
+            if "SSL" in str(e) or "certificate" in str(e):
+                 console.print(f"[bold red]SSL/TLS Error during login for {self.base_url}{endpoint}: {e}. Ensure your X-UI panel's HTTPS certificate is valid or try disabling SSL verification if using a self-signed certificate (for testing).[/bold red]")
+            else:
+                console.print(f"[bold red]Login request failed: {e}[/bold red]")
             self.login_status = False
             return False
 
@@ -166,12 +164,10 @@ class XUIAPI:
         
         endpoint = "/panel/api/inbounds/update"
         
-        # Temporarily override Content-Type for JSON data if needed
         original_content_type = self.session.headers.get('Content-Type')
         self.session.headers.update({'Content-Type': 'application/json'})
         response = self._request("POST", endpoint, json_data=inbound_config)
         
-        # Restore original Content-Type
         if original_content_type:
             self.session.headers.update({'Content-Type': original_content_type})
         else:
@@ -188,8 +184,9 @@ def main():
 
     # 1. Load/Setup Config
     config = load_config()
+    verify_ssl_setting = config.get('verify_ssl', True) # Default to True
+    
     if not config:
-        # Prompt for details if no config or corrupted config
         console.print("[bold yellow]No configuration found or it's invalid. Please enter X-UI details:[/bold yellow]")
         config = {}
         config['url'] = Prompt.ask(
@@ -198,11 +195,29 @@ def main():
         )
         config['username'] = Prompt.ask("Enter X-UI Username", default=os.getenv("XUI_USERNAME", ""))
         config['password'] = getpass.getpass("Enter X-UI Password (will not be displayed): ")
+        
+        verify_ssl_input = Prompt.ask(
+            "[bold white]Verify SSL Certificates for HTTPS connections?[/bold white] "
+            "([green]y[/green]/[red]n[/red], choose [red]n[/red] if using self-signed or internal certificates)",
+            choices=["y", "n"], default="y"
+        )
+        verify_ssl_setting = True if verify_ssl_input.lower() == 'y' else False
+        config['verify_ssl'] = verify_ssl_setting
+        
         save_config(config)
     else:
         console.print(f"[bold green]Loaded configuration for {config['url']}[/bold green]")
+        if 'verify_ssl' not in config:
+            verify_ssl_input = Prompt.ask(
+                "[bold white]Verify SSL Certificates for HTTPS connections?[/bold white] "
+                "([green]y[/green]/[red]n[/red], choose [red]n[/red] if using self-signed or internal certificates)",
+                choices=["y", "n"], default="y"
+            )
+            verify_ssl_setting = True if verify_ssl_input.lower() == 'y' else False
+            config['verify_ssl'] = verify_ssl_setting
+            save_config(config)
 
-    xui_api = XUIAPI(config['url'], config['username'], config['password'])
+    xui_api = XUIAPI(config['url'], config['username'], config['password'], verify_ssl=verify_ssl_setting)
 
     # 2. Login
     with console.status("[bold blue]Attempting to log in to X-UI panel...[/bold blue]", spinner="dots"):
@@ -218,7 +233,7 @@ def main():
         console.print("[bold yellow]No inbounds found or error fetching inbounds.[/bold yellow]")
         sys.exit(0)
     
-    inbounds = inbounds['obj']
+    inbounds = inbounds_res['obj']
 
     # Display inbounds and allow selection
     inbound_table = Table(title="Available Inbounds", show_lines=True)
