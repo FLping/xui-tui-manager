@@ -75,8 +75,8 @@ fi
 
 # --- Install Python dependencies ---
 echo -e "${YELLOW}Installing Python dependencies (requests, rich)...${NC}"
-# Use --break-system-packages for modern pip versions on some distros to avoid permission errors
-pip3 install requests rich --break-system-packages
+# Removed --break-system-packages as it's not supported by all pip versions.
+pip3 install requests rich 
 if [ $? -ne 0 ]; then
     echo -e "${RED}Error: Failed to install Python dependencies.${NC}"
     exit 1
@@ -135,8 +135,9 @@ if [ $? -ne 0 ]; then
 fi
 echo -e "${GREEN}Symbolic link created successfully.${NC}"
 
-echo -e "\n${GREEN}X-UI TUI Manager installation complete! 🎉${NC}"
+echo -e "\n${GREEN}X-UI TUI Manager installation complete! �${NC}"
 echo -e "${GREEN}You can now run the application from any terminal with:${NC}"
 echo -e "  ${YELLOW}${EXECUTABLE_NAME}${NC}"
 echo -e "\n${YELLOW}Note: The configuration file will be stored in your home directory: ~/.xui_tui_config.json${NC}"
 echo -e "${YELLOW}If you encounter 'pip' errors related to system packages, try running the install script again or manually install pip with 'sudo apt-get install python3-pip' or 'sudo yum install python3-pip'.${NC}"
+�
