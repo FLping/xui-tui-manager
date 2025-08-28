@@ -23,7 +23,7 @@ def load_config():
     """Loads X-UI panel configuration from a JSON file."""
     if os.path.exists(CONFIG_FILE):
         try:
-            with open(CONFIG_FILE, 'r') as f: # Corrected syntax
+            with open(CONFIG_FILE, 'r') as f:
                 return json.load(f)
         except json.JSONDecodeError:
             console.print(f"[bold red]Error: Could not parse {CONFIG_FILE}. It might be corrupted.[/bold red]")
@@ -33,7 +33,7 @@ def load_config():
 def save_config(config):
     """Saves X-UI panel configuration to a JSON file."""
     try:
-        with open(CONFIG_FILE, 'w') as f: # Corrected syntax
+        with open(CONFIG_FILE, 'w') as f:
             json.dump(config, f, indent=4)
         console.print(f"[bold green]Configuration saved to {CONFIG_FILE}[/bold green]")
     except IOError as e:
@@ -62,7 +62,7 @@ class XUIAPI:
     def _request(self, method, endpoint, json_data=None, data=None):
         """Helper method to make API requests and handle common errors."""
         url = urljoin(self.base_url, endpoint)
-        # console.print(f"[bold blue]DEBUG: Requesting URL: {url}[/bold blue]") # Debug line, removed for clarity
+        console.print(f"[bold blue]DEBUG: Requesting URL: {url}[/bold blue]") # Debug line
         try:
             if method == "POST":
                 if endpoint == "login":
@@ -83,6 +83,11 @@ class XUIAPI:
 
             response.raise_for_status() 
             
+            # --- DEBUGGING LINES ADDED HERE for all requests ---
+            console.print(f"[bold yellow]DEBUG: Response Status for {url}: {response.status_code}[/bold yellow]")
+            console.print(f"[bold yellow]DEBUG: Raw Response Text for {url}: '{response.text}'[/bold yellow]")
+            # --- END DEBUGGING LINES ---
+
             res_json = response.json()
             if not res_json.get('success', False):
                 msg = res_json.get('msg', 'Unknown X-UI API error.')
@@ -116,7 +121,6 @@ class XUIAPI:
         endpoint = "login" # Endpoint relative to base_url
         data = {"username": self.username, "password": self.password}
         
-        # Simplified: _request handles exceptions and returns None on error
         response = self._request("POST", endpoint, data=data) 
         
         if response and response.get('success'):
