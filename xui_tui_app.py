@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import requests
 import json
 import os
@@ -15,7 +16,7 @@ from rich.panel import Panel
 console = Console()
 
 # --- Configuration Handling ---
-CONFIG_FILE = "xui_config.json"
+CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".xui_tui_config.json") # Store config in user's home directory
 
 def load_config():
     """Loads X-UI panel configuration from a JSON file."""
@@ -227,7 +228,7 @@ def main():
             sys.exit(1)
 
     if not selected_inbound_ids:
-        console.print("[bold yellow]No inbounds selected. Exiting.[/bold yellow]")
+        console.print("[bold yellow]No inbounds selected. Exiting.[/bold red]")
         sys.exit(0)
 
     # 4. Get Client Details
