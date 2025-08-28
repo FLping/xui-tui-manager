@@ -43,22 +43,25 @@ def save_config(config):
 class XUIAPI:
     """A client for interacting with the X-UI panel API."""
     def __init__(self, base_url, username, password):
-        # Ensure base_url is just the protocol://host:port part
+        # The base_url should now include the full path, e.g., https://domain:port/webpath
         self.base_url = base_url.rstrip('/')
         self.username = username
         self.password = password
         self.session = requests.Session()
         
-        # Parse the hostname and port from the base_url to use for the Host header
+        # Parse the hostname from the base_url for the Host header
+        # The Host header should NOT include the path.
         parsed_url = urlparse(self.base_url)
-        # Use netloc if it contains host:port, otherwise just host
-        host_header = parsed_url.netloc if ':' in parsed_url.netloc else parsed_url.hostname
+        
+        # Construct the Host header as domain[:port]
+        # netloc already contains host:port if port is specified, otherwise just host
+        host_header = parsed_url.netloc
         
         # Set default headers for the session
         self.session.headers.update({
             'Accept': 'application/json',
             'Content-Type': 'application/x-www-form-urlencoded', # Login often uses this
-            'Host': host_header # Explicitly set the Host header
+            'Host': host_header # Explicitly set the Host header based on the URL's domain/IP:port
         })
         self.login_status = False
 
@@ -190,7 +193,7 @@ def main():
         console.print("[bold yellow]No configuration found or it's invalid. Please enter X-UI details:[/bold yellow]")
         config = {}
         config['url'] = Prompt.ask(
-            "Enter X-UI Panel URL (e.g., [green]https://your-domain.com:port[/green] or [green]http://your-ip:port[/green])",
+            "Enter X-UI Panel URL (e.g., [green]https://your-domain.com:port/your_webpath[/green])",
             default=os.getenv("XUI_URL", "")
         )
         config['username'] = Prompt.ask("Enter X-UI Username", default=os.getenv("XUI_USERNAME", ""))
@@ -215,7 +218,7 @@ def main():
         console.print("[bold yellow]No inbounds found or error fetching inbounds.[/bold yellow]")
         sys.exit(0)
     
-    inbounds = inbounds_res['obj']
+    inbounds = inbounds['obj']
 
     # Display inbounds and allow selection
     inbound_table = Table(title="Available Inbounds", show_lines=True)
