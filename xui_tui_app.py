@@ -66,7 +66,7 @@ class XUIAPI:
         Can send either JSON data (json_data) or form-urlencoded data (data).
         """
         url = urljoin(self.base_url, endpoint)
-        console.print(f"[bold blue]DEBUG: Requesting URL: {url}[/bold blue]") 
+        # console.print(f"[bold blue]DEBUG: Requesting URL: {url}[/bold blue]") # Debugging line removed
         
         # Store current Content-Type to restore it later
         original_content_type = self.session.headers.get('Content-Type')
@@ -96,18 +96,11 @@ class XUIAPI:
 
             response.raise_for_status() # Raise an exception for HTTP errors (4xx or 5xx)
             
-            # --- DEBUGGING LINES REMOVED for general use ---
-            # console.print(f"[bold yellow]DEBUG: Response Status for {url}: {response.status_code}[/bold yellow]")
-            # console.print(f"[bold yellow]DEBUG: Raw Response Text for {url}: '{response.text}'[/bold yellow]")
-            # --- END DEBUGGING LINES ---
-
             # Check if response text is empty before trying to parse JSON
             if not response.text.strip():
                 # If 200 OK and empty, do NOT automatically treat as success for updates.
-                # This was a previous attempt to work around server behavior, but it masked failures.
-                # Now, we expect *some* JSON response for updates, even if it's just {"success": true}.
+                # Now, we expect *some* JSON response for most API calls.
                 raise json.JSONDecodeError("Empty response body, expecting JSON response from server.", response.text, 0)
-
 
             res_json = response.json()
             if not res_json.get('success', False):
@@ -134,7 +127,6 @@ class XUIAPI:
             self.session.headers.update({'Content-Type': original_content_type}) # Restore on error
             return None
         except json.JSONDecodeError as e:
-            # Re-introduced debug for JSONDecodeError as it's the current problem.
             console.print(f"[bold red]Error: JSON parsing failed from {url}. Status: {response.status_code}. Content: '{response.text}'. Error: {e}[/bold red]")
             self.session.headers.update({'Content-Type': original_content_type}) # Restore on error
             return None
@@ -202,71 +194,82 @@ class XUIAPI:
         # Send the entire payload_data as JSON
         return self._request("POST", endpoint, json_data=payload_data) 
 
-    def add_client_to_inbound(self, inbound_id, client_email, client_password=None):
-        """Adds a new client to a specified inbound."""
+    def add_client(self, inbound_id: int, client_email: str, client_password: str = None, **kwargs):
+        """
+        Adds a new client to a specified inbound using the dedicated addClient endpoint.
+        This endpoint expects form-urlencoded data.
+        """
         if not self.login_status:
             console.print("[bold red]Not logged in. Please log in first.[/bold red]")
             return False
+        
+        endpoint = "panel/api/inbounds/addClient"
 
-        inbound_details = self.get_inbound_details(inbound_id)
-        if not inbound_details:
-            console.print(f"[bold red]Error: Could not fetch details for inbound ID {inbound_id}.[/bold red]")
-            return False
-
-        if inbound_details['protocol'].lower() not in ['vless', 'vmess', 'trojan']:
-            console.print(f"[bold red]Inbound protocol '{inbound_details['protocol']}' does not support client management via this script.[/bold red]")
-            return False
-
-        # 'settings' field from API is a JSON string, so parse it
-        settings = json.loads(inbound_details['settings'])
-        clients = settings.get('clients', [])
-
-        # Check if client with this email already exists
-        for client in clients:
-            if client.get('email') == client_email:
-                console.print(f"[bold yellow]Warning: Client with email '{client_email}' already exists in inbound ID {inbound_id}.[/bold yellow]")
-                return False # Or you could prompt to update
-
+        # Generate UUID for VLESS/VMESS, use password for Trojan if provided
         new_client_uuid = str(uuid.uuid4())
         generated_password = client_password if client_password else str(uuid.uuid4())
 
-        new_client = {}
-        if inbound_details['protocol'].lower() == 'vless':
-            new_client = {
-                "id": new_client_uuid,
-                "email": client_email,
-                "flow": "", 
-                "level": 0, 
-                "password": generated_password
-            }
-        elif inbound_details['protocol'].lower() == 'vmess':
-            new_client = {
-                "id": generated_password, 
-                "email": client_email,
-                "alterId": 0, 
-                "level": 0
-            }
-        elif inbound_details['protocol'].lower() == 'trojan':
-            new_client = {
-                "password": generated_password,
-                "email": client_email,
-                "level": 0
-            }
-        
-        clients.append(new_client)
-        settings['clients'] = clients
-        
-        # Update inbound_details with the modified settings dictionary (NOT stringified yet)
-        # update_inbound will stringify it.
-        inbound_details['settings'] = settings 
+        form_data = {
+            "inboundId": inbound_id,
+            "email": client_email,
+            "totalGB": kwargs.get("totalGB", 0),
+            "expiryTime": kwargs.get("expiryTime", 0),
+            "limitIp": kwargs.get("limitIp", 0),
+            "flow": kwargs.get("flow", ""),
+            "level": kwargs.get("level", 0),
+            # Protocol-specific fields for new client:
+            "id": new_client_uuid, # Default for VLESS/VMess type (which uses ID as UUID)
+            "password": generated_password, # Default for VLESS/Trojan
+            "alterId": kwargs.get("alterId", 0) # For VMess
+        }
 
-        response = self.update_inbound(inbound_details)
+        # Fetch inbound details to determine protocol and adjust form_data if necessary
+        inbound_details = self.get_inbound_details(inbound_id)
+        if not inbound_details:
+            console.print(f"[bold red]Error: Could not fetch inbound details for ID {inbound_id} to determine protocol for new client.[/bold red]")
+            return False
+        
+        protocol = inbound_details['protocol'].lower()
+
+        if protocol == 'vless':
+            # VLESS uses 'id' for UUID, 'password' for password
+            form_data.pop('alterId', None) # VLESS doesn't use alterId
+        elif protocol == 'vmess':
+            # VMess uses 'id' for password/UUID, and 'alterId'
+            form_data['id'] = generated_password # VMess 'id' is often the password/UUID
+            form_data.pop('password', None) # VMess doesn't use 'password' field like VLESS/Trojan
+        elif protocol == 'trojan':
+            # Trojan uses 'password', doesn't typically have an 'id' field in this context
+            form_data.pop('id', None) # Trojan doesn't use 'id'
+            form_data.pop('alterId', None) # Trojan doesn't use alterId
+        else:
+            console.print(f"[bold red]Protocol '{protocol}' not explicitly supported for adding clients in this script.[/bold red]")
+            return False
+
+        # Add any other specific client fields passed in kwargs
+        for key, value in kwargs.items():
+            if key not in form_data: # Avoid overwriting core fields
+                form_data[key] = value
+
+        response = self._request("POST", endpoint, data=form_data) 
+        
         if response and response.get('success'):
             console.print(f"[bold green]Client '{client_email}' added to inbound ID {inbound_id}.[/bold green]")
             return True
         else:
-            console.print(f"[bold red]Failed to add client '{client_email}' to inbound ID {inbound_id}. Msg: {response.get('msg', 'Unknown error') if response else 'No response'}[/bold red]")
+            msg = response.get('msg', 'Unknown error during addClient.') if response else 'No response from server.'
+            console.print(f"[bold red]Failed to add client '{client_email}' to inbound ID {inbound_id}. Msg: {msg}[/bold red]")
             return False
+
+    def add_client_to_inbound(self, inbound_id, client_email, client_password=None):
+        """
+        Deprecated. Now directly calls add_client.
+        Adds a new client to a specified inbound.
+        """
+        # This method is effectively replaced by add_client, which handles the dedicated endpoint.
+        # However, for consistency with calling contexts, we can keep it as a wrapper.
+        return self.add_client(inbound_id, client_email, client_password)
+
 
 # --- Helper Functions for TUI Menu Logic ---
 def get_inbound_selection(xui_api):
@@ -465,14 +468,14 @@ def handle_add_client(xui_api):
             result_message = ""
 
             try:
-                # The actual add_client_to_inbound logic handles existence checks and protocol compatibility
-                success = xui_api.add_client_to_inbound(inbound_id, client_email, client_password)
+                # Now using the dedicated add_client endpoint
+                success = xui_api.add_client(inbound_id, client_email, client_password)
                 if success:
                     result_status = "Success"
                     result_action = "Added"
                     result_message = f"Client '{client_email}' successfully added."
                 else:
-                    # add_client_to_inbound prints detailed messages directly on failure
+                    # The add_client method prints detailed messages directly on failure
                     result_status = "Failed"
                     result_action = "Not Added"
                     result_message = f"Failed to add client '{client_email}'." 
