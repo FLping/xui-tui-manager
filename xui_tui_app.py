@@ -54,7 +54,7 @@ class XUIAPI:
         
         self.session.headers.update({
             'Accept': 'application/json',
-            # Default Content-Type to form-urlencoded, as many X-UI POSTs expect this for login
+            # Default Content-Type is for login, will be overridden for other calls as needed
             'Content-Type': 'application/x-www-form-urlencoded', 
             'Host': host_header 
         })
@@ -66,8 +66,6 @@ class XUIAPI:
         Can send either JSON data (json_data) or form-urlencoded data (data).
         """
         url = urljoin(self.base_url, endpoint)
-        # console.print(f"[bold blue]DEBUG: Requesting URL: {url}[/bold blue]") # Debugging line removed
-        
         # Store current Content-Type to restore it later
         original_content_type = self.session.headers.get('Content-Type')
         
@@ -96,10 +94,7 @@ class XUIAPI:
 
             response.raise_for_status() # Raise an exception for HTTP errors (4xx or 5xx)
             
-            # Check if response text is empty before trying to parse JSON
             if not response.text.strip():
-                # If 200 OK and empty, do NOT automatically treat as success for updates.
-                # Now, we expect *some* JSON response for most API calls.
                 raise json.JSONDecodeError("Empty response body, expecting JSON response from server.", response.text, 0)
 
             res_json = response.json()
@@ -197,7 +192,7 @@ class XUIAPI:
     def add_client(self, inbound_id: int, client_email: str, client_password: str = None, **kwargs):
         """
         Adds a new client to a specified inbound using the dedicated addClient endpoint.
-        This endpoint expects form-urlencoded data.
+        This endpoint expects a JSON payload.
         """
         if not self.login_status:
             console.print("[bold red]Not logged in. Please log in first.[/bold red]")
@@ -208,7 +203,7 @@ class XUIAPI:
         new_client_uuid = str(uuid.uuid4())
         generated_password = client_password if client_password else str(uuid.uuid4())
 
-        form_data = {
+        payload = {
             "inboundId": inbound_id,
             "email": client_email,
             "totalGB": kwargs.get("totalGB", 0),
@@ -226,27 +221,27 @@ class XUIAPI:
         protocol = inbound_details['protocol'].lower()
 
         if protocol == 'vless':
-            form_data['uuid'] = new_client_uuid # VLESS client UUID
-            form_data['password'] = generated_password
-            form_data.pop('alterId', None) # VLESS doesn't use alterId
+            payload['uuid'] = new_client_uuid # VLESS client UUID
+            payload['password'] = generated_password
+            payload.pop('alterId', None) # VLESS doesn't use alterId
         elif protocol == 'vmess':
-            form_data['uuid'] = generated_password # VMess 'id' is effectively password/UUID
-            form_data['alterId'] = kwargs.get("alterId", 0)
-            form_data.pop('password', None) # VMess doesn't use 'password' field like VLESS/Trojan
+            payload['uuid'] = generated_password # VMess 'id' is effectively password/UUID
+            payload['alterId'] = kwargs.get("alterId", 0)
+            payload.pop('password', None) # VMess doesn't use 'password' field like VLESS/Trojan
         elif protocol == 'trojan':
-            form_data['password'] = generated_password
-            form_data.pop('id', None) # Trojan doesn't use a UUID 'id' like VLESS/VMess
-            form_data.pop('alterId', None) # Trojan doesn't use alterId
+            payload['password'] = generated_password
+            payload.pop('id', None) # Trojan doesn't use a UUID 'id' like VLESS/VMess
+            payload.pop('alterId', None) # Trojan doesn't use alterId
         else:
             console.print(f"[bold red]Protocol '{protocol}' not explicitly supported for adding clients in this script.[/bold red]")
             return False
 
         # Add any other specific client fields passed in kwargs
         for key, value in kwargs.items():
-            if key not in form_data: # Avoid overwriting core fields
-                form_data[key] = value
+            if key not in payload: # Avoid overwriting core fields
+                payload[key] = value
 
-        response = self._request("POST", endpoint, data=form_data) 
+        response = self._request("POST", endpoint, json_data=payload) # Send as JSON
         
         if response and response.get('success'):
             console.print(f"[bold green]Client '{client_email}' added to inbound ID {inbound_id}.[/bold green]")
@@ -318,7 +313,7 @@ def get_inbound_selection(xui_api):
             return None
     
     if not selected_inbound_ids:
-        console.print("[bold yellow]No inbounds selected. Returning to main menu.[/bold yellow]")
+        console.print("[bold yellow]No inbounds selected. Returning to main menu.[/bold red]")
         return None
 
     return selected_inbound_ids, inbounds
