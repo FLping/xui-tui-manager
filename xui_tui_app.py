@@ -17,10 +17,9 @@ from rich.panel import Panel
 console = Console()
 
 # --- Configuration Handling ---
-CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".xui_tui_config.json") # Store config in user's home directory
+CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".xui_tui_config.json")
 
 def load_config():
-    """Loads X-UI panel configuration from a JSON file."""
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, 'r') as f:
@@ -31,7 +30,6 @@ def load_config():
     return None
 
 def save_config(config):
-    """Saves X-UI panel configuration to a JSON file."""
     try:
         with open(CONFIG_FILE, 'w') as f:
             json.dump(config, f, indent=4)
@@ -41,59 +39,47 @@ def save_config(config):
 
 # --- X-UI API Client ---
 class XUIAPI:
-    """A client for interacting with the X-UI panel API."""
     def __init__(self, base_url, username, password, verify_ssl=True):
-        self.base_url = base_url.rstrip('/') + '/' # Ensure it always has a trailing slash for urljoin
+        self.base_url = base_url.rstrip('/') + '/'
         self.username = username
         self.password = password
         self.session = requests.Session()
-        self.verify_ssl = verify_ssl # Store SSL verification setting
-        
+        self.verify_ssl = verify_ssl
+
         parsed_url = urlparse(self.base_url)
-        host_header = parsed_url.netloc 
-        
+        host_header = parsed_url.netloc
+
         self.session.headers.update({
             'Accept': 'application/json',
-            # Default Content-Type is for login, will be overridden for other calls as needed
-            'Content-Type': 'application/x-www-form-urlencoded', 
-            'Host': host_header 
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Host': host_header
         })
         self.login_status = False
 
     def _request(self, method, endpoint, json_data=None, data=None):
-        """
-        Helper method to make API requests and handle common errors.
-        Can send either JSON data (json_data) or form-urlencoded data (data).
-        """
         url = urljoin(self.base_url, endpoint)
-        # Store current Content-Type to restore it later
         original_content_type = self.session.headers.get('Content-Type')
-        
+
         try:
             response = None
             if method == "POST":
                 if json_data is not None:
-                    # Explicitly set Content-Type for JSON payloads
                     self.session.headers.update({'Content-Type': 'application/json'})
                     response = self.session.post(url, json=json_data, timeout=10, verify=self.verify_ssl)
                 elif data is not None:
-                    # Explicitly set Content-Type for form-urlencoded data
                     self.session.headers.update({'Content-Type': 'application/x-www-form-urlencoded'})
                     response = self.session.post(url, data=data, timeout=10, verify=self.verify_ssl)
                 else:
-                    # Default to form-urlencoded if no specific data type given for POST
-                    self.session.headers.update({'Content-Type': 'application/x-www-form-urlencoded'})
                     response = self.session.post(url, timeout=10, verify=self.verify_ssl)
             elif method == "GET":
                 response = self.session.get(url, timeout=10, verify=self.verify_ssl)
             else:
                 raise ValueError(f"Unsupported HTTP method: {method}")
 
-            # Restore original Content-Type header after the request
             self.session.headers.update({'Content-Type': original_content_type})
 
-            response.raise_for_status() # Raise an exception for HTTP errors (4xx or 5xx)
-            
+            response.raise_for_status()
+
             if not response.text.strip():
                 raise json.JSONDecodeError("Empty response body, expecting JSON response from server.", response.text, 0)
 
@@ -102,177 +88,128 @@ class XUIAPI:
                 msg = res_json.get('msg', 'Unknown X-UI API error.')
                 raise requests.exceptions.RequestException(f"X-UI API Error: {msg}")
             return res_json
-        except requests.exceptions.HTTPError as e:
-            console.print(f"[bold red]HTTP Error for {url}: {e.response.status_code} - {e.response.text}[/bold red]")
-            self.session.headers.update({'Content-Type': original_content_type}) # Restore on error
-            return None
-        except requests.exceptions.ConnectionError as e:
-            console.print(f"[bold red]Connection Error for {url}: {e}. Check URL, network connection, and SSL certificate.[/bold red]")
-            self.session.headers.update({'Content-Type': original_content_type}) # Restore on error
-            return None
-        except requests.exceptions.Timeout:
-            console.print(f"[bold red]Request timed out for {url}.[/bold red]")
-            self.session.headers.update({'Content-Type': original_content_type}) # Restore on error
-            return None
-        except requests.exceptions.RequestException as e:
-            if "SSL" in str(e) or "certificate" in str(e):
-                console.print(f"[bold red]SSL/TLS Error for {url}: {e}. Try disabling SSL verification if you are using a self-signed certificate or custom HTTPS setup.[/bold red]")
-            else:
-                console.print(f"[bold red]Request Error for {url}: {e}[/bold red]")
-            self.session.headers.update({'Content-Type': original_content_type}) # Restore on error
-            return None
-        except json.JSONDecodeError as e:
-            console.print(f"[bold red]Error: JSON parsing failed from {url}. Status: {response.status_code}. Content: '{response.text}'. Error: {e}[/bold red]")
-            self.session.headers.update({'Content-Type': original_content_type}) # Restore on error
-            return None
         except Exception as e:
-            console.print(f"[bold red]An unexpected error occurred for {url}: {e}[/bold red]")
-            self.session.headers.update({'Content-Type': original_content_type}) # Restore on error
+            console.print(f"[bold red]Request failed for {url}: {e}[/bold red]")
+            self.session.headers.update({'Content-Type': original_content_type})
             return None
 
     def login(self):
-        """Authenticates with the X-UI panel."""
         console.print("[bold blue]Logging in to X-UI...[/bold blue]")
-        endpoint = "login" # Endpoint relative to base_url
         data = {"username": self.username, "password": self.password}
-        
-        response = self._request("POST", endpoint, data=data) 
-        
+        response = self._request("POST", "login", data=data)
+
         if response and response.get('success'):
             self.login_status = True
             console.print("[bold green]Login successful![/bold green]")
             return True
         else:
-            msg = response.get('msg', 'Authentication failed.') if response else 'No response or unsuccessful login from server.'
+            msg = response.get('msg', 'Authentication failed.') if response else 'No response from server.'
             console.print(f"[bold red]Login failed: {msg}[/bold red]")
-            self.login_status = False
             return False
 
     def get_inbounds(self):
-        """Fetches a list of all inbounds."""
         if not self.login_status:
-            console.print("[bold red]Not logged in. Please log in first.[/bold red]")
+            console.print("[bold red]Not logged in.[/bold red]")
             return None
-        return self._request("GET", "panel/api/inbounds/list") 
+        return self._request("GET", "panel/api/inbounds/list")
 
     def get_inbound_details(self, inbound_id):
-        """Fetches the detailed configuration for a specific inbound."""
         if not self.login_status:
-            console.print("[bold red]Not logged in. Please log in first.[/bold red]")
+            console.print("[bold red]Not logged in.[/bold red]")
             return None
-        
-        inbounds_list_res = self.get_inbounds()
-        if inbounds_list_res and inbounds_list_res.get('obj'):
-            for inbound in inbounds_list_res['obj']:
+        res = self.get_inbounds()
+        if res and res.get('obj'):
+            for inbound in res['obj']:
                 if inbound['id'] == inbound_id:
                     return inbound
         return None
 
     def update_inbound(self, inbound_config: dict):
-        """
-        Updates the configuration of an inbound.
-        Sends data as application/json, with 'settings' as a stringified JSON.
-        """
         if not self.login_status:
-            console.print("[bold red]Not logged in. Please log in first.[/bold red]")
+            console.print("[bold red]Not logged in.[/bold red]")
             return None
-        
-        endpoint = "panel/api/inbounds/update" 
-        
-        # Create a mutable copy to modify
-        payload_data = inbound_config.copy()
-        
-        # Ensure 'settings' field is stringified JSON within the main payload
-        if 'settings' in payload_data and isinstance(payload_data['settings'], dict):
-            payload_data['settings'] = json.dumps(payload_data['settings'])
-        
-        # Send the entire payload_data as JSON
-        return self._request("POST", endpoint, json_data=payload_data) 
+
+        settings = inbound_config.get("settings")
+        if isinstance(settings, dict):
+            settings_str = json.dumps(settings)
+        else:
+            settings_str = settings
+
+        payload = {
+            "id": inbound_config["id"],
+            "settings": settings_str
+        }
+
+        return self._request("POST", "panel/api/inbounds/update", data=payload)
 
     def add_client(self, inbound_id: int, client_email: str, client_password: str = None, **kwargs):
-        """
-        Adds a new client to a specified inbound using the dedicated addClient endpoint.
-        This endpoint expects a JSON payload.
-        """
         if not self.login_status:
-            console.print("[bold red]Not logged in. Please log in first.[/bold red]")
+            console.print("[bold red]Not logged in.[/bold red]")
             return False
-        
-        endpoint = "panel/api/inbounds/addClient"
+
+        inbound = self.get_inbound_details(inbound_id)
+        if not inbound:
+            console.print(f"[bold red]Inbound {inbound_id} not found.[/bold red]")
+            return False
+
+        protocol = inbound["protocol"].lower()
+        settings = json.loads(inbound["settings"])
+        clients = settings.get("clients", [])
 
         new_client_uuid = str(uuid.uuid4())
         generated_password = client_password if client_password else str(uuid.uuid4())
 
-        payload = {
-            "inboundId": inbound_id,
+        client_obj = {
             "email": client_email,
+            "enable": True,
+            "flow": kwargs.get("flow", ""),
+            "limitIp": kwargs.get("limitIp", 0),
             "totalGB": kwargs.get("totalGB", 0),
             "expiryTime": kwargs.get("expiryTime", 0),
-            "limitIp": kwargs.get("limitIp", 0),
-            "flow": kwargs.get("flow", ""),
-            "level": kwargs.get("level", 0),
+            "tgId": kwargs.get("tgId", ""),
+            "subId": kwargs.get("subId", str(uuid.uuid4())[:12]),
+            "reset": 0
         }
 
-        inbound_details = self.get_inbound_details(inbound_id)
-        if not inbound_details:
-            console.print(f"[bold red]Error: Could not fetch inbound details for ID {inbound_id} to determine protocol for new client.[/bold red]")
-            return False
-        
-        protocol = inbound_details['protocol'].lower()
-
-        if protocol == 'vless':
-            payload['uuid'] = new_client_uuid # VLESS client UUID
-            payload['password'] = generated_password
-            payload.pop('alterId', None) # VLESS doesn't use alterId
-        elif protocol == 'vmess':
-            payload['uuid'] = generated_password # VMess 'id' is effectively password/UUID
-            payload['alterId'] = kwargs.get("alterId", 0)
-            payload.pop('password', None) # VMess doesn't use 'password' field like VLESS/Trojan
-        elif protocol == 'trojan':
-            payload['password'] = generated_password
-            payload.pop('id', None) # Trojan doesn't use a UUID 'id' like VLESS/VMess
-            payload.pop('alterId', None) # Trojan doesn't use alterId
+        if protocol == "vless":
+            client_obj["id"] = new_client_uuid
+            client_obj["uuid"] = new_client_uuid
+            client_obj["password"] = generated_password
+        elif protocol == "vmess":
+            client_obj["id"] = generated_password
+            client_obj["alterId"] = kwargs.get("alterId", 0)
+        elif protocol == "trojan":
+            client_obj["password"] = generated_password
         else:
-            console.print(f"[bold red]Protocol '{protocol}' not explicitly supported for adding clients in this script.[/bold red]")
+            console.print(f"[bold red]Unsupported protocol: {protocol}[/bold red]")
             return False
 
-        # Add any other specific client fields passed in kwargs
-        for key, value in kwargs.items():
-            if key not in payload: # Avoid overwriting core fields
-                payload[key] = value
+        clients.append(client_obj)
+        settings["clients"] = clients
 
-        response = self._request("POST", endpoint, json_data=payload) # Send as JSON
-        
-        if response and response.get('success'):
-            console.print(f"[bold green]Client '{client_email}' added to inbound ID {inbound_id}.[/bold green]")
+        payload = {
+            "id": inbound_id,
+            "settings": json.dumps(settings)
+        }
+
+        response = self._request("POST", "panel/api/inbounds/addClient", data=payload)
+        if response and response.get("success"):
+            console.print(f"[bold green]Client '{client_email}' added to inbound {inbound_id}.[/bold green]")
             return True
         else:
-            msg = response.get('msg', 'Unknown error during addClient.') if response else 'No response from server.'
-            console.print(f"[bold red]Failed to add client '{client_email}' to inbound ID {inbound_id}. Msg: {msg}[/bold red]")
+            msg = response.get("msg", "Unknown error") if response else "No response"
+            console.print(f"[bold red]Failed to add client: {msg}[/bold red]")
             return False
-
-    def add_client_to_inbound(self, inbound_id, client_email, client_password=None):
-        """
-        Deprecated. Now directly calls add_client.
-        Adds a new client to a specified inbound.
-        """
-        # This method is effectively replaced by add_client, which handles the dedicated endpoint.
-        # However, for consistency with calling contexts, we can keep it as a wrapper.
-        return self.add_client(inbound_id, client_email, client_password)
-
 
 # --- Helper Functions for TUI Menu Logic ---
 def get_inbound_selection(xui_api):
-    """Fetches, displays, and prompts for inbound selection."""
     console.print("\n[bold blue]Fetching inbounds...[/bold blue]")
     inbounds_res = xui_api.get_inbounds()
-    
     if not inbounds_res or not isinstance(inbounds_res, dict) or not inbounds_res.get('obj'):
-        console.print("[bold yellow]No inbounds found or error fetching inbounds, or invalid response format.[/bold yellow]")
+        console.print("[bold yellow]No inbounds found.[/bold yellow]")
         return None
-    
-    inbounds = inbounds_res['obj'] 
 
+    inbounds = inbounds_res['obj']
     inbound_table = Table(title="Available Inbounds", show_lines=True)
     inbound_table.add_column("Index", style="cyan", justify="center")
     inbound_table.add_column("ID", style="magenta")
@@ -281,23 +218,13 @@ def get_inbound_selection(xui_api):
     inbound_table.add_column("Port", style="blue")
 
     for i, inbound in enumerate(inbounds):
-        inbound_table.add_row(
-            str(i + 1),
-            str(inbound['id']),
-            inbound['remark'],
-            inbound['protocol'].upper(),
-            str(inbound['port'])
-        )
+        inbound_table.add_row(str(i+1), str(inbound['id']), inbound['remark'], inbound['protocol'].upper(), str(inbound['port']))
 
     console.print(inbound_table)
 
-    selected_indices_str = Prompt.ask(
-        "\n[bold white]Enter comma-separated indices of inbounds to manage[/bold white] "
-        "(e.g., [green]1,3,4[/green] or [green]all[/green] for all inbounds)",
-        default="all"
-    )
-
+    selected_indices_str = Prompt.ask("Enter indices (e.g. 1,2 or all)", default="all")
     selected_inbound_ids = []
+
     if selected_indices_str.lower() == "all":
         selected_inbound_ids = [inb['id'] for inb in inbounds]
     else:
@@ -306,278 +233,97 @@ def get_inbound_selection(xui_api):
             for idx in indices:
                 if 1 <= idx <= len(inbounds):
                     selected_inbound_ids.append(inbounds[idx - 1]['id'])
-                else:
-                    console.print(f"[bold yellow]Warning: Index {idx} is out of range. Skipping.[/bold yellow]")
         except ValueError:
-            console.print("[bold red]Invalid input for inbound selection. Returning to main menu.[/bold red]")
+            console.print("[bold red]Invalid input[/bold red]")
             return None
-    
-    if not selected_inbound_ids:
-        console.print("[bold yellow]No inbounds selected. Returning to main menu.[/bold red]")
-        return None
 
     return selected_inbound_ids, inbounds
 
-def handle_update_client(xui_api):
-    """Handles the 'Update Client' menu option."""
-    selection_result = get_inbound_selection(xui_api)
-    if selection_result is None:
-        return
-
-    selected_inbound_ids, all_inbounds = selection_result
-
-    client_identifier = Prompt.ask(
-        "Enter client [cyan]UUID[/cyan] or [cyan]Email[/cyan] to update (e.g., [green]john@example.com[/green] or [green]your-uuid[/green])"
-    )
-    if not client_identifier:
-        console.print("[bold red]Client identifier cannot be empty. Returning to main menu.[/bold red]")
-        return
-
-    new_password = Prompt.ask(
-        "Enter [bold magenta]NEW[/bold magenta] client password (leave empty to keep current)"
-    )
-
-    console.print(f"\n[bold white]Starting client update for '{client_identifier}' across {len(selected_inbound_ids)} inbounds...[/bold white]")
-
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        "{task.completed}/{task.total}",
-        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-        console=console,
-        transient=True
-    ) as progress:
-        update_task = progress.add_task("[cyan]Processing inbounds...", total=len(selected_inbound_ids))
-
-        results = []
-        for inbound_id in selected_inbound_ids:
-            inbound_name = next((inb['remark'] for inb in all_inbounds if inb['id'] == inbound_id), f"ID {inbound_id}")
-            progress.update(update_task, description=f"[cyan]Updating '{inbound_name}'...[/cyan]")
-            
-            result_status = "Failed"
-            result_action = "N/A"
-            result_message = ""
-
-            try:
-                inbound_details = xui_api.get_inbound_details(inbound_id)
-                if not inbound_details:
-                    result_message = "Could not fetch inbound details."
-                    raise Exception(result_message)
-                
-                if inbound_details['protocol'].lower() not in ['vless', 'vmess', 'trojan']:
-                    result_message = f"Inbound protocol '{inbound_details['protocol']}' does not support client management."
-                    raise Exception(result_message)
-
-                settings = json.loads(inbound_details['settings'])
-                clients = settings.get('clients', [])
-
-                client_found = False
-                for client in clients:
-                    if (client.get('id') == client_identifier) or \
-                       (client.get('email') == client_identifier and client_identifier):
-                        
-                        console.print(f"  [bold blue]Client '{client_identifier}' found in '{inbound_name}'. Updating...[/bold blue]")
-                        client_found = True
-                        result_action = "Updated"
-
-                        if new_password:
-                            if inbound_details['protocol'].lower() == 'vless' or inbound_details['protocol'].lower() == 'trojan':
-                                client['password'] = new_password
-                                result_message = f"Client password updated to: {new_password}"
-                            elif inbound_details['protocol'].lower() == 'vmess':
-                                client['id'] = new_password 
-                                result_message = f"VMess client ID (password) updated to: {new_password}"
-                            else:
-                                result_message = f"Password update not supported for protocol {inbound_details['protocol']}. Client updated."
-                        else:
-                            result_message = "Client details updated (password not changed)."
-                        break
-
-                if not client_found:
-                    result_message = f"Client '{client_identifier}' not found in '{inbound_name}'. Not updated."
-                    console.print(f"  [bold yellow]{result_message}[/bold yellow]")
-                else:
-                    settings['clients'] = clients
-                    # Pass settings as a dictionary to inbound_details, update_inbound will stringify it
-                    inbound_details['settings'] = settings 
-
-                    response = xui_api.update_inbound(inbound_details)
-                    if not response or response.get('success') is False:
-                        raise Exception(response.get('msg', 'Unknown API error during update.'))
-
-                    result_status = "Success"
-
-            except Exception as e:
-                console.print(f"  [bold red]Error updating '{inbound_name}': {e}[/bold red]")
-                result_status = "Failed"
-                result_message = str(e)
-
-            results.append({"inbound": inbound_name, "status": result_status, "action": result_action, "message": result_message})
-            progress.update(update_task, advance=1)
-    
-    display_summary_table(results, "Client Update Results")
-
 def handle_add_client(xui_api):
-    """Handles the 'Add Client' menu option."""
     selection_result = get_inbound_selection(xui_api)
     if selection_result is None:
         return
-    
-    selected_inbound_ids, all_inbounds = selection_result
 
-    client_email = Prompt.ask(
-        "Enter [cyan]Email[/cyan] for the new client (e.g., [green]new_user@example.com[/green])"
-    )
-    if not client_email:
-        console.print("[bold red]Client email cannot be empty. Returning to main menu.[/bold red]")
+    selected_inbound_ids, all_inbounds = selection_result
+    client_email = Prompt.ask("Enter Email for new client")
+    client_password = Prompt.ask("Enter password (blank for auto)", default="")
+
+    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=console) as progress:
+        task = progress.add_task("Adding clients...", total=len(selected_inbound_ids))
+        for inbound_id in selected_inbound_ids:
+            xui_api.add_client(inbound_id, client_email, client_password or None)
+            progress.update(task, advance=1)
+
+def handle_update_client(xui_api):
+    selection_result = get_inbound_selection(xui_api)
+    if selection_result is None:
         return
 
-    client_password = Prompt.ask(
-        "Enter [bold magenta]password[/bold magenta] for the new client (leave empty to auto-generate)"
-    )
+    selected_inbound_ids, all_inbounds = selection_result
+    client_identifier = Prompt.ask("Enter client UUID or Email to update")
+    new_password = Prompt.ask("Enter new password (blank = unchanged)", default="")
 
-    console.print(f"\n[bold white]Adding client '{client_email}' to {len(selected_inbound_ids)} inbounds...[/bold white]")
-
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        "{task.completed}/{task.total}",
-        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-        console=console,
-        transient=True
-    ) as progress:
-        add_task = progress.add_task("[cyan]Processing inbounds...", total=len(selected_inbound_ids))
-
-        results = []
+    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=console) as progress:
+        task = progress.add_task("Updating clients...", total=len(selected_inbound_ids))
         for inbound_id in selected_inbound_ids:
-            inbound_name = next((inb['remark'] for inb in all_inbounds if inb['id'] == inbound_id), f"ID {inbound_id}")
-            progress.update(add_task, description=f"[cyan]Adding to '{inbound_name}'...[/cyan]")
-            
-            result_status = "Failed"
-            result_action = "N/A"
-            result_message = ""
+            inbound = xui_api.get_inbound_details(inbound_id)
+            if not inbound:
+                continue
+            settings = json.loads(inbound['settings'])
+            updated = False
+            for client in settings.get('clients', []):
+                if client.get('id') == client_identifier or client.get('email') == client_identifier:
+                    if new_password:
+                        if inbound['protocol'].lower() in ["vless", "trojan"]:
+                            client['password'] = new_password
+                        elif inbound['protocol'].lower() == "vmess":
+                            client['id'] = new_password
+                    updated = True
+            if updated:
+                inbound['settings'] = settings
+                xui_api.update_inbound(inbound)
+            progress.update(task, advance=1)
 
-            try:
-                # Now using the dedicated add_client endpoint
-                success = xui_api.add_client(inbound_id, client_email, client_password)
-                if success:
-                    result_status = "Success"
-                    result_action = "Added"
-                    result_message = f"Client '{client_email}' successfully added."
-                else:
-                    # The add_client method prints detailed messages directly on failure
-                    result_status = "Failed"
-                    result_action = "Not Added"
-                    result_message = f"Failed to add client '{client_email}'." 
-
-            except Exception as e:
-                console.print(f"  [bold red]Error adding to '{inbound_name}': {e}[/bold red]")
-                result_status = "Failed"
-                result_message = str(e)
-
-            results.append({"inbound": inbound_name, "status": result_status, "action": result_action, "message": result_message})
-            progress.update(add_task, advance=1)
-    
-    display_summary_table(results, "Client Add Results")
-
-
-def display_summary_table(results, title):
-    """Displays a formatted summary table of client operations."""
-    console.print(Panel(f"[bold white]{title}[/bold white]", expand=False))
-    summary_table = Table(title=title, show_lines=True)
-    summary_table.add_column("Inbound", style="cyan")
-    summary_table.add_column("Status", style="magenta")
-    summary_table.add_column("Action", style="green")
-    summary_table.add_column("Message", style="blue")
-
-    for res in results:
-        status_style = "green" if res['status'] == "Success" else "red"
-        summary_table.add_row(res['inbound'], f"[{status_style}]{res['status']}[/{status_style}]", res['action'], res['message'])
-    console.print(summary_table)
-    console.print("\n[bold green]Operation complete![/bold green]")
-
-# --- TUI Application Logic ---
+# --- Main TUI ---
 def main():
-    console.print(Panel("[bold green]X-UI Client Manager TUI[/bold green]\n"
-                        "Manage clients across multiple X-UI inbounds with one command.",
-                        expand=False))
-    console.print("-" * 60)
-
-    # 1. Load/Setup Config
-    config = load_config()
-    
-    # If config loading failed or file didn't exist, initialize an empty dict
-    if config is None:
-        console.print("[bold yellow]No configuration found or it's invalid. Please enter X-UI details:[/bold yellow]")
-        config = {} # Initialize config as an empty dictionary here
-
-    # Now config is guaranteed to be a dict (either loaded or new empty one)
-    # Check for 'url' to determine if it's a new config that hasn't been filled
-    if 'url' not in config: # This checks if it's truly a new config that hasn't been filled
-        config['url'] = Prompt.ask(
-            "Enter X-UI Panel URL (e.g., [green]https://your-domain.com:port/jende/[/green] - **must** end with a slash)",
-            default=os.getenv("XUI_URL", "")
-        )
-        config['username'] = Prompt.ask("Enter X-UI Username", default=os.getenv("XUI_USERNAME", ""))
-        config['password'] = getpass.getpass("Enter X-UI Password (will not be displayed): ")
-        
-        verify_ssl_input = Prompt.ask(
-            "[bold white]Verify SSL Certificates for HTTPS connections?[/bold white] "
-            "([green]y[/green]/[red]n[/red], choose [red]n[/red] if using self-signed or internal certificates)",
-            choices=["y", "n"], default="y"
-        )
-        config['verify_ssl'] = True if verify_ssl_input.lower() == 'y' else False
+    console.print(Panel("[bold green]X-UI Client Manager TUI[/bold green]"))
+    config = load_config() or {}
+    if 'url' not in config:
+        config['url'] = Prompt.ask("Enter X-UI URL")
+        config['username'] = Prompt.ask("Enter X-UI Username")
+        config['password'] = getpass.getpass("Enter X-UI Password: ")
+        verify_ssl_input = Prompt.ask("Verify SSL? (y/n)", choices=["y","n"], default="y")
+        config['verify_ssl'] = True if verify_ssl_input == 'y' else False
         save_config(config)
     else:
-        console.print(f"[bold green]Loaded configuration for {config['url']}[/bold green]")
-        # If config exists but verify_ssl is missing, prompt for it
         if 'verify_ssl' not in config:
-            verify_ssl_input = Prompt.ask(
-                "[bold white]Verify SSL Certificates for HTTPS connections?[/bold white] "
-                "([green]y[/green]/[red]n[/red], choose [red]n[/red] if using self-signed or internal certificates)",
-                choices=["y", "n"], default="y"
-            )
-            config['verify_ssl'] = True if verify_ssl_input.lower() == 'y' else False
+            verify_ssl_input = Prompt.ask("Verify SSL? (y/n)", choices=["y","n"], default="y")
+            config['verify_ssl'] = True if verify_ssl_input == 'y' else False
             save_config(config)
 
-    verify_ssl_setting = config.get('verify_ssl', True) # Now config is guaranteed to be a dict.
+    xui_api = XUIAPI(config['url'], config['username'], config['password'], verify_ssl=config.get('verify_ssl', True))
+    if not xui_api.login():
+        sys.exit(1)
 
-    xui_api = XUIAPI(config['url'], config['username'], config['password'], verify_ssl=verify_ssl_setting)
-
-    # 2. Login
-    with console.status("[bold blue]Attempting to log in to X-UI panel...[/bold blue]", spinner="dots"):
-        if not xui_api.login():
-            console.print("[bold red]Login failed. Please check credentials and URL.[/bold red]")
-            sys.exit(1) # Exit if login fails
-
-    # 3. Main Menu Loop
     while True:
-        console.print("\n" + "-" * 30)
-        console.print(Panel("[bold green]X-UI Client Management Menu[/bold green]", expand=False))
-        menu_table = Table(show_header=False, show_lines=False, box=None)
-        menu_table.add_column("Option", style="cyan")
-        menu_table.add_column("Description", style="white")
-        menu_table.add_row("0.", "Exit")
-        menu_table.add_row("1.", "Update Client (by UUID or Email)")
-        menu_table.add_row("2.", "Add New Client (by Email)")
+        console.print(Panel("[bold green]Menu[/bold green]"))
+        menu_table = Table(show_header=False)
+        menu_table.add_row("0", "Exit")
+        menu_table.add_row("1", "Update Client")
+        menu_table.add_row("2", "Add Client")
         console.print(menu_table)
-        console.print("-" * 30)
-
-        choice = Prompt.ask("Please enter your selection", choices=["0", "1", "2"], default="0")
+        choice = Prompt.ask("Select", choices=["0","1","2"], default="0")
 
         if choice == "0":
-            console.print("[bold green]Exiting X-UI Client Manager. Goodbye! 👋[/bold green]")
             sys.exit(0)
         elif choice == "1":
             handle_update_client(xui_api)
         elif choice == "2":
             handle_add_client(xui_api)
-        else:
-            console.print("[bold red]Invalid choice. Please select 0, 1, or 2.[/bold red]")
 
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        console.print("\n[bold yellow]Operation cancelled by user.[/bold yellow]")
+        console.print("\n[bold yellow]Cancelled by user[/bold yellow]")
         sys.exit(0)
