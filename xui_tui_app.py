@@ -205,7 +205,6 @@ class XUIAPI:
         
         endpoint = "panel/api/inbounds/addClient"
 
-        # Generate UUID for VLESS/VMESS, use password for Trojan if provided
         new_client_uuid = str(uuid.uuid4())
         generated_password = client_password if client_password else str(uuid.uuid4())
 
@@ -217,13 +216,8 @@ class XUIAPI:
             "limitIp": kwargs.get("limitIp", 0),
             "flow": kwargs.get("flow", ""),
             "level": kwargs.get("level", 0),
-            # Protocol-specific fields for new client:
-            "id": new_client_uuid, # Default for VLESS/VMess type (which uses ID as UUID)
-            "password": generated_password, # Default for VLESS/Trojan
-            "alterId": kwargs.get("alterId", 0) # For VMess
         }
 
-        # Fetch inbound details to determine protocol and adjust form_data if necessary
         inbound_details = self.get_inbound_details(inbound_id)
         if not inbound_details:
             console.print(f"[bold red]Error: Could not fetch inbound details for ID {inbound_id} to determine protocol for new client.[/bold red]")
@@ -232,15 +226,16 @@ class XUIAPI:
         protocol = inbound_details['protocol'].lower()
 
         if protocol == 'vless':
-            # VLESS uses 'id' for UUID, 'password' for password
+            form_data['uuid'] = new_client_uuid # VLESS client UUID
+            form_data['password'] = generated_password
             form_data.pop('alterId', None) # VLESS doesn't use alterId
         elif protocol == 'vmess':
-            # VMess uses 'id' for password/UUID, and 'alterId'
-            form_data['id'] = generated_password # VMess 'id' is often the password/UUID
+            form_data['uuid'] = generated_password # VMess 'id' is effectively password/UUID
+            form_data['alterId'] = kwargs.get("alterId", 0)
             form_data.pop('password', None) # VMess doesn't use 'password' field like VLESS/Trojan
         elif protocol == 'trojan':
-            # Trojan uses 'password', doesn't typically have an 'id' field in this context
-            form_data.pop('id', None) # Trojan doesn't use 'id'
+            form_data['password'] = generated_password
+            form_data.pop('id', None) # Trojan doesn't use a UUID 'id' like VLESS/VMess
             form_data.pop('alterId', None) # Trojan doesn't use alterId
         else:
             console.print(f"[bold red]Protocol '{protocol}' not explicitly supported for adding clients in this script.[/bold red]")
