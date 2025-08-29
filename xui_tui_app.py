@@ -54,7 +54,7 @@ class XUIAPI:
         
         self.session.headers.update({
             'Accept': 'application/json',
-            # Default Content-Type to form-urlencoded, as many X-UI POSTs expect this
+            # Default Content-Type to form-urlencoded, as many X-UI POSTs expect this for login
             'Content-Type': 'application/x-www-form-urlencoded', 
             'Host': host_header 
         })
@@ -68,17 +68,18 @@ class XUIAPI:
         url = urljoin(self.base_url, endpoint)
         console.print(f"[bold blue]DEBUG: Requesting URL: {url}[/bold blue]") 
         
-        current_content_type = self.session.headers.get('Content-Type')
+        # Store current Content-Type to restore it later
+        original_content_type = self.session.headers.get('Content-Type')
         
         try:
             response = None
             if method == "POST":
                 if json_data is not None:
-                    # Temporarily override Content-Type for JSON payloads
+                    # Explicitly set Content-Type for JSON payloads
                     self.session.headers.update({'Content-Type': 'application/json'})
                     response = self.session.post(url, json=json_data, timeout=10, verify=self.verify_ssl)
                 elif data is not None:
-                    # Ensure Content-Type is form-urlencoded for data payloads
+                    # Explicitly set Content-Type for form-urlencoded data
                     self.session.headers.update({'Content-Type': 'application/x-www-form-urlencoded'})
                     response = self.session.post(url, data=data, timeout=10, verify=self.verify_ssl)
                 else:
@@ -90,24 +91,22 @@ class XUIAPI:
             else:
                 raise ValueError(f"Unsupported HTTP method: {method}")
 
-            # Restore original Content-Type after the request
-            self.session.headers.update({'Content-Type': current_content_type})
+            # Restore original Content-Type header after the request
+            self.session.headers.update({'Content-Type': original_content_type})
 
             response.raise_for_status() # Raise an exception for HTTP errors (4xx or 5xx)
             
-            # --- DEBUGGING LINES ADDED HERE for all requests ---
-            console.print(f"[bold yellow]DEBUG: Response Status for {url}: {response.status_code}[/bold yellow]")
-            console.print(f"[bold yellow]DEBUG: Raw Response Text for {url}: '{response.text}'[/bold yellow]")
+            # --- DEBUGGING LINES REMOVED for general use ---
+            # console.print(f"[bold yellow]DEBUG: Response Status for {url}: {response.status_code}[/bold yellow]")
+            # console.print(f"[bold yellow]DEBUG: Raw Response Text for {url}: '{response.text}'[/bold yellow]")
             # --- END DEBUGGING LINES ---
 
             # Check if response text is empty before trying to parse JSON
             if not response.text.strip():
-                # If 200 OK and empty, treat as success if no other error.
-                # X-UI sometimes returns empty string for successful updates.
-                if response.status_code == 200:
-                    return {'success': True, 'msg': 'Operation successful (empty response from server).', 'obj': None}
-                else:
-                    raise json.JSONDecodeError("Empty response body, expecting value", response.text, 0)
+                # If 200 OK and empty, do NOT automatically treat as success for updates.
+                # This was a previous attempt to work around server behavior, but it masked failures.
+                # Now, we expect *some* JSON response for updates, even if it's just {"success": true}.
+                raise json.JSONDecodeError("Empty response body, expecting JSON response from server.", response.text, 0)
 
 
             res_json = response.json()
@@ -117,31 +116,31 @@ class XUIAPI:
             return res_json
         except requests.exceptions.HTTPError as e:
             console.print(f"[bold red]HTTP Error for {url}: {e.response.status_code} - {e.response.text}[/bold red]")
-            # Restore Content-Type on error as well
-            self.session.headers.update({'Content-Type': current_content_type})
+            self.session.headers.update({'Content-Type': original_content_type}) # Restore on error
             return None
         except requests.exceptions.ConnectionError as e:
             console.print(f"[bold red]Connection Error for {url}: {e}. Check URL, network connection, and SSL certificate.[/bold red]")
-            self.session.headers.update({'Content-Type': current_content_type})
+            self.session.headers.update({'Content-Type': original_content_type}) # Restore on error
             return None
         except requests.exceptions.Timeout:
             console.print(f"[bold red]Request timed out for {url}.[/bold red]")
-            self.session.headers.update({'Content-Type': current_content_type})
+            self.session.headers.update({'Content-Type': original_content_type}) # Restore on error
             return None
         except requests.exceptions.RequestException as e:
             if "SSL" in str(e) or "certificate" in str(e):
                 console.print(f"[bold red]SSL/TLS Error for {url}: {e}. Try disabling SSL verification if you are using a self-signed certificate or custom HTTPS setup.[/bold red]")
             else:
                 console.print(f"[bold red]Request Error for {url}: {e}[/bold red]")
-            self.session.headers.update({'Content-Type': current_content_type})
+            self.session.headers.update({'Content-Type': original_content_type}) # Restore on error
             return None
         except json.JSONDecodeError as e:
+            # Re-introduced debug for JSONDecodeError as it's the current problem.
             console.print(f"[bold red]Error: JSON parsing failed from {url}. Status: {response.status_code}. Content: '{response.text}'. Error: {e}[/bold red]")
-            self.session.headers.update({'Content-Type': current_content_type})
+            self.session.headers.update({'Content-Type': original_content_type}) # Restore on error
             return None
         except Exception as e:
             console.print(f"[bold red]An unexpected error occurred for {url}: {e}[/bold red]")
-            self.session.headers.update({'Content-Type': current_content_type})
+            self.session.headers.update({'Content-Type': original_content_type}) # Restore on error
             return None
 
     def login(self):
@@ -185,7 +184,7 @@ class XUIAPI:
     def update_inbound(self, inbound_config: dict):
         """
         Updates the configuration of an inbound.
-        Sends data as application/x-www-form-urlencoded, with 'settings' as a stringified JSON.
+        Sends data as application/json, with 'settings' as a stringified JSON.
         """
         if not self.login_status:
             console.print("[bold red]Not logged in. Please log in first.[/bold red]")
@@ -193,13 +192,15 @@ class XUIAPI:
         
         endpoint = "panel/api/inbounds/update" 
         
-        # Ensure 'settings' field is stringified JSON before sending as form data
         # Create a mutable copy to modify
-        form_data = inbound_config.copy()
-        if 'settings' in form_data and isinstance(form_data['settings'], dict):
-            form_data['settings'] = json.dumps(form_data['settings'])
+        payload_data = inbound_config.copy()
         
-        return self._request("POST", endpoint, data=form_data) # Pass as form_data
+        # Ensure 'settings' field is stringified JSON within the main payload
+        if 'settings' in payload_data and isinstance(payload_data['settings'], dict):
+            payload_data['settings'] = json.dumps(payload_data['settings'])
+        
+        # Send the entire payload_data as JSON
+        return self._request("POST", endpoint, json_data=payload_data) 
 
     def add_client_to_inbound(self, inbound_id, client_email, client_password=None):
         """Adds a new client to a specified inbound."""
